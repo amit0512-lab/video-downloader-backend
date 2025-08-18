@@ -2,52 +2,20 @@ const express = require('express');
 const cors = require('cors');
 const YTDlpWrap = require('yt-dlp-wrap').default;
 const axios = require('axios');
-const path = require('path'); // We'll need path for the binary location
 
 const app = express();
 const port = 3000;
 
-// Initialize yt-dlp-wrap without assuming the binary exists yet
+// This is all the initialization we need now.
+// The 'postinstall' script in package.json ensures the binary exists.
 const ytDlpWrap = new YTDlpWrap();
-
-// --- NEW DEPLOYMENT-FRIENDLY STARTUP LOGIC ---
-async function initializeAndStartServer() {
-    try {
-        console.log('Server starting... Checking for yt-dlp binary.');
-
-        // Define a writable directory for the binary. Render provides '/var/data'.
-        // This ensures we have a persistent place to store the executable.
-        const binaryDir = path.join('/var/data', 'yt-dlp-binaries');
-        const binaryPath = path.join(binaryDir, 'yt-dlp');
-
-        // Explicitly download the latest yt-dlp binary from GitHub
-        // This is the most crucial step for ensuring it works on Render.
-        await YTDlpWrap.downloadFromGithub(binaryPath);
-
-        // Tell our ytDlpWrap instance where to find the binary we just downloaded
-        ytDlpWrap.setBinaryPath(binaryPath);
-        
-        console.log('yt-dlp binary is ready. Starting web server...');
-
-        // Start the Express server only AFTER the binary is confirmed to be ready
-        app.listen(port, () => {
-            console.log(`Server is running on http://localhost:${port}`);
-        });
-
-    } catch (error) {
-        console.error('Failed to initialize server:', error);
-        process.exit(1); // Exit if we can't get the binary
-    }
-}
-
 
 // --- Middleware ---
 app.use(cors());
 app.use(express.json());
 
-// --- API Endpoints (These remain the same) ---
+// --- API Endpoints ---
 app.post('/download-info', async (req, res) => {
-    // ... your download-info endpoint logic is unchanged ...
     const videoURL = req.body.url;
     if (!videoURL) {
         return res.status(400).json({ success: false, error: 'Video URL is required.' });
@@ -77,7 +45,6 @@ app.post('/download-info', async (req, res) => {
 });
 
 app.get('/proxy-download', async (req, res) => {
-    // ... your proxy-download endpoint logic is unchanged ...
     try {
         const videoUrl = req.query.url;
         const videoTitle = req.query.title || 'video';
@@ -99,6 +66,7 @@ app.get('/proxy-download', async (req, res) => {
     }
 });
 
-
-// --- Call the function to start everything ---
-initializeAndStartServer();
+// --- Start the server ---
+app.listen(port, () => {
+    console.log(`Server is running on http://localhost:${port}`);
+});
