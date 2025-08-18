@@ -4,9 +4,7 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "build": "npm install",
-    "postinstall": "node ./node_modules/yt-dlp-wrap/dist/downloader.js"
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +13,6 @@
     "axios": "^1.7.2",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "yt-dlp-wrap": "^2.3.12"
+    "yt-dlp-exec": "^3.0.2"
   }
 }

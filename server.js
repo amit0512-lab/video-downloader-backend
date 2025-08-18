@@ -1,47 +1,59 @@
 const express = require('express');
 const cors = require('cors');
-const YTDlpWrap = require('yt-dlp-wrap').default;
+const ytdlp = require('yt-dlp-exec'); // Using the new library
 const axios = require('axios');
 
 const app = express();
 const port = 3000;
-
-// This is all the initialization we need now.
-// The 'postinstall' script in package.json ensures the binary exists.
-const ytDlpWrap = new YTDlpWrap();
 
 // --- Middleware ---
 app.use(cors());
 app.use(express.json());
 
 // --- API Endpoints ---
-app.post('/download-info', async (req, res) => {
+app.post('/download-info', (req, res) => {
     const videoURL = req.body.url;
     if (!videoURL) {
         return res.status(400).json({ success: false, error: 'Video URL is required.' });
     }
     console.log(`Received URL for info: ${videoURL}`);
-    try {
-        const metadata = await ytDlpWrap.getVideoInfo(videoURL);
+
+    // Using yt-dlp-exec to get video metadata as a JSON object
+    ytdlp(videoURL, {
+        dumpSingleJson: true,
+        noWarnings: true,
+        callHome: false,
+        noCheckCertificate: true
+    })
+    .then(metadata => {
         const formats = metadata.formats.filter(f => f.vcodec !== 'none' && f.acodec !== 'none' && f.ext === 'mp4');
         if (formats.length === 0) {
-            return res.status(500).json({ success: false, error: 'No suitable MP4 formats found.' });
+            // If no perfect MP4 is found, try finding any format with a URL
+            const anyFormat = metadata.formats.find(f => f.url);
+            if (!anyFormat) {
+                return res.status(500).json({ success: false, error: 'No downloadable formats found.' });
+            }
+            metadata.bestFormat = anyFormat;
+        } else {
+             metadata.bestFormat = formats.reduce((best, current) => ((current.height || 0) > (best.height || 0) ? current : best), formats[0]);
         }
-        const bestFormat = formats.reduce((best, current) => (current.height > best.height ? current : best), formats[0]);
-        if (!bestFormat || !bestFormat.url) {
+        
+        if (!metadata.bestFormat || !metadata.bestFormat.url) {
             return res.status(500).json({ success: false, error: 'Could not find a downloadable URL.' });
         }
+
         const videoTitle = metadata.title.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_') || 'video';
         console.log(`Found video: ${videoTitle}`);
         res.status(200).json({
             success: true,
-            downloadUrl: bestFormat.url,
+            downloadUrl: metadata.bestFormat.url,
             title: videoTitle
         });
-    } catch (error) {
+    })
+    .catch(error => {
         console.error('Error fetching video info:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to process the video link.' });
-    }
+        res.status(500).json({ success: false, error: 'Failed to process the video link. It may be private or invalid.' });
+    });
 });
 
 app.get('/proxy-download', async (req, res) => {
