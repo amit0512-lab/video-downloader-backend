@@ -1,15 +1,37 @@
-// paste this whole file as server.js (overwriting your old one)
 const express = require('express');
 const cors = require('cors');
 const ytdlp = require('yt-dlp-exec');
 const axios = require('axios');
 
 const app = express();
-const port = 3000;
+
+// Use Render's PORT or default to 3000 for local dev
+const port = process.env.PORT || 3000;
 
 // --- Middleware ---
-app.use(cors());
+// Option 1: open CORS (simple)
+// app.use(cors());
+
+// Option 2: restrict to your Netlify domain(s)
+app.use(cors({
+  origin: [
+    'https://video-downloader-frontend.netlify.app',
+    /\.netlify\.app$/  // allows preview deploys too
+  ],
+  methods: ['GET', 'POST'],
+  credentials: false
+}));
+
 app.use(express.json());
+
+// --- Health & root endpoints (for UptimeRobot & sanity checks) ---
+app.get('/', (req, res) => {
+  res.status(200).send('OK');
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ ok: true, uptime: process.uptime(), ts: new Date().toISOString() });
+});
 
 // --- API Endpoints ---
 app.post('/download-info', async (req, res) => {
@@ -21,9 +43,8 @@ app.post('/download-info', async (req, res) => {
     }
 
     console.log(`📩 Received URL for info: ${videoURL}`);
-
-    // --- Fetch metadata ---
     console.log("⏳ Running yt-dlp to fetch metadata...");
+
     const metadata = await ytdlp(videoURL, {
       dumpSingleJson: true,
       noWarnings: true,
@@ -34,7 +55,6 @@ app.post('/download-info', async (req, res) => {
     console.log("✅ Metadata fetched successfully.");
     console.log("🔎 Available formats count:", metadata.formats ? metadata.formats.length : 0);
 
-    // --- Pick best format ---
     let formats = (metadata.formats || []).filter(f => f.vcodec !== 'none' && f.acodec !== 'none' && f.ext === 'mp4');
     let bestFormat;
 
@@ -44,7 +64,7 @@ app.post('/download-info', async (req, res) => {
         ((current.height || 0) > (best.height || 0) ? current : best), formats[0]
       );
     } else {
-      console.warn("⚠️ No MP4 formats found with both audio & video. Falling back to any format with URL.");
+      console.warn("⚠️ No MP4 with both audio & video. Falling back to any format with URL.");
       bestFormat = (metadata.formats || []).find(f => f.url);
     }
 
@@ -57,7 +77,7 @@ app.post('/download-info', async (req, res) => {
       .replace(/[^a-zA-Z0-9\s]/g, '')
       .replace(/\s+/g, '_');
 
-    console.log(`🎯 Best format chosen: ${bestFormat.height || "?"}p, ext: ${bestFormat.ext}`);
+    console.log(`🎯 Best format: ${bestFormat.height || "?"}p, ext: ${bestFormat.ext}`);
     console.log(`📌 Video title: ${videoTitle}`);
 
     res.json({
@@ -87,7 +107,7 @@ app.get('/proxy-download', async (req, res) => {
     }
 
     console.log(`🚀 Proxying download for: ${videoTitle}`);
-    console.log(`🔗 Source URL (first 200 chars): ${videoUrl.slice(0, 200)}...`);
+    console.log(`🔗 Source URL (first 200 chars): ${String(videoUrl).slice(0, 200)}...`);
 
     res.setHeader('Content-Disposition', `attachment; filename="${videoTitle}.mp4"`);
     res.setHeader('Content-Type', 'video/mp4');
@@ -96,6 +116,7 @@ app.get('/proxy-download', async (req, res) => {
       method: 'GET',
       url: videoUrl,
       responseType: 'stream',
+      // timeout: 0 // (default no timeout) keep streaming large files
     });
 
     response.data.pipe(res);
@@ -106,7 +127,6 @@ app.get('/proxy-download', async (req, res) => {
 
     response.data.on("error", (err) => {
       console.error("❌ Stream error:", err.message);
-      // If headers already sent, don't try to send another response
     });
 
   } catch (error) {
@@ -117,5 +137,5 @@ app.get('/proxy-download', async (req, res) => {
 
 // --- Start the server ---
 app.listen(port, () => {
-  console.log(`✅ Server is running on http://localhost:${port}`);
+  console.log(`✅ Server is running on port ${port}`);
 });
