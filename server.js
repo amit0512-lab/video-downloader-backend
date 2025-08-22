@@ -1,8 +1,8 @@
+// paste this whole file as server.js (overwriting your old one)
 const express = require('express');
 const cors = require('cors');
-const ytdlp = require('yt-dlp-exec'); // Using the new library
+const ytdlp = require('yt-dlp-exec');
 const axios = require('axios');
-const youtubedl = require('youtube-dl-exec');
 
 const app = express();
 const port = 3000;
@@ -12,74 +12,110 @@ app.use(cors());
 app.use(express.json());
 
 // --- API Endpoints ---
-app.post('/download-info', (req, res) => {
+app.post('/download-info', async (req, res) => {
+  try {
     const videoURL = req.body.url;
     if (!videoURL) {
-        return res.status(400).json({ success: false, error: 'Video URL is required.' });
+      console.warn("⚠️ No video URL provided in request body.");
+      return res.status(400).json({ success: false, error: 'Video URL is required.' });
     }
-    console.log(`Received URL for info: ${videoURL}`);
 
-    // Using yt-dlp-exec to get video metadata as a JSON object
-    ytdlp(videoURL, {
-        dumpSingleJson: true,
-        noWarnings: true,
-        callHome: false,
-        noCheckCertificate: true
-    })
-    .then(metadata => {
-        const formats = metadata.formats.filter(f => f.vcodec !== 'none' && f.acodec !== 'none' && f.ext === 'mp4');
-        if (formats.length === 0) {
-            // If no perfect MP4 is found, try finding any format with a URL
-            const anyFormat = metadata.formats.find(f => f.url);
-            if (!anyFormat) {
-                return res.status(500).json({ success: false, error: 'No downloadable formats found.' });
-            }
-            metadata.bestFormat = anyFormat;
-        } else {
-             metadata.bestFormat = formats.reduce((best, current) => ((current.height || 0) > (best.height || 0) ? current : best), formats[0]);
-        }
-        
-        if (!metadata.bestFormat || !metadata.bestFormat.url) {
-            return res.status(500).json({ success: false, error: 'Could not find a downloadable URL.' });
-        }
+    console.log(`📩 Received URL for info: ${videoURL}`);
 
-        const videoTitle = metadata.title.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_') || 'video';
-        console.log(`Found video: ${videoTitle}`);
-        res.status(200).json({
-            success: true,
-            downloadUrl: metadata.bestFormat.url,
-            title: videoTitle
-        });
-    })
-    .catch(error => {
-        console.error('Error fetching video info:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to process the video link. It may be private or invalid.' });
+    // --- Fetch metadata ---
+    console.log("⏳ Running yt-dlp to fetch metadata...");
+    const metadata = await ytdlp(videoURL, {
+      dumpSingleJson: true,
+      noWarnings: true,
+      callHome: false,
+      noCheckCertificate: true,
     });
+
+    console.log("✅ Metadata fetched successfully.");
+    console.log("🔎 Available formats count:", metadata.formats ? metadata.formats.length : 0);
+
+    // --- Pick best format ---
+    let formats = (metadata.formats || []).filter(f => f.vcodec !== 'none' && f.acodec !== 'none' && f.ext === 'mp4');
+    let bestFormat;
+
+    if (formats.length > 0) {
+      console.log("🎥 Found MP4 formats:", formats.map(f => `${f.height || "?"}p`).join(", "));
+      bestFormat = formats.reduce((best, current) =>
+        ((current.height || 0) > (best.height || 0) ? current : best), formats[0]
+      );
+    } else {
+      console.warn("⚠️ No MP4 formats found with both audio & video. Falling back to any format with URL.");
+      bestFormat = (metadata.formats || []).find(f => f.url);
+    }
+
+    if (!bestFormat || !bestFormat.url) {
+      console.error("❌ No valid download URL found in formats.");
+      return res.status(500).json({ success: false, error: 'No downloadable format found.' });
+    }
+
+    const videoTitle = (metadata.title || 'video')
+      .replace(/[^a-zA-Z0-9\s]/g, '')
+      .replace(/\s+/g, '_');
+
+    console.log(`🎯 Best format chosen: ${bestFormat.height || "?"}p, ext: ${bestFormat.ext}`);
+    console.log(`📌 Video title: ${videoTitle}`);
+
+    res.json({
+      success: true,
+      downloadUrl: bestFormat.url,
+      title: videoTitle,
+    });
+
+  } catch (error) {
+    console.error("❌ Error in /download-info:", error && error.message ? error.message : error);
+    if (error && error.stderr) console.error("yt-dlp stderr:", error.stderr);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process the video link. It may be private, unsupported, or invalid.',
+      details: error && error.message ? error.message : String(error),
+    });
+  }
 });
 
 app.get('/proxy-download', async (req, res) => {
-    try {
-        const videoUrl = req.query.url;
-        const videoTitle = req.query.title || 'video';
-        if (!videoUrl) {
-            return res.status(400).send('Missing video URL');
-        }
-        console.log(`Proxying download for: ${videoTitle}`);
-        res.setHeader('Content-Disposition', `attachment; filename="${videoTitle}.mp4"`);
-        res.setHeader('Content-Type', 'video/mp4');
-        const response = await axios({
-            method: 'GET',
-            url: videoUrl,
-            responseType: 'stream'
-        });
-        response.data.pipe(res);
-    } catch (error) {
-        console.error('Proxy download error:', error.message);
-        res.status(500).send('Error during video download.');
+  try {
+    const videoUrl = req.query.url;
+    const videoTitle = req.query.title || 'video';
+    if (!videoUrl) {
+      console.warn("⚠️ Missing video URL in proxy request.");
+      return res.status(400).send('Missing video URL');
     }
+
+    console.log(`🚀 Proxying download for: ${videoTitle}`);
+    console.log(`🔗 Source URL (first 200 chars): ${videoUrl.slice(0, 200)}...`);
+
+    res.setHeader('Content-Disposition', `attachment; filename="${videoTitle}.mp4"`);
+    res.setHeader('Content-Type', 'video/mp4');
+
+    const response = await axios({
+      method: 'GET',
+      url: videoUrl,
+      responseType: 'stream',
+    });
+
+    response.data.pipe(res);
+
+    response.data.on("end", () => {
+      console.log(`✅ Finished streaming: ${videoTitle}`);
+    });
+
+    response.data.on("error", (err) => {
+      console.error("❌ Stream error:", err.message);
+      // If headers already sent, don't try to send another response
+    });
+
+  } catch (error) {
+    console.error("❌ Proxy download error:", error && error.message ? error.message : error);
+    res.status(500).send('Error during video download.');
+  }
 });
 
 // --- Start the server ---
 app.listen(port, () => {
-    console.log(`Server is running on http://localhost:${port}`);
+  console.log(`✅ Server is running on http://localhost:${port}`);
 });
